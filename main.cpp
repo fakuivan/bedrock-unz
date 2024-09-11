@@ -78,8 +78,8 @@ int main(int argc, const char **argv) {
     return 1;
   }
   if (!fs::is_directory(args::get(db_dir))) {
-    std::cerr << "DB directory path does not point to a valid directory"
-              << std::endl;
+    std::cerr << "DB directory path does not point to a valid directory: "
+              << args::get(db_dir) << std::endl;
     return 1;
   }
 
