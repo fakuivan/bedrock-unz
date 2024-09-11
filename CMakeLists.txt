@@ -23,8 +23,3 @@ add_subdirectory(leveldb)
 add_executable(main main.cpp)
 target_link_libraries(main PRIVATE leveldb)
 target_include_directories(main PRIVATE leveldb/include)
-
-add_executable(main-debug main.cpp)
-target_link_libraries(main PRIVATE leveldb)
-target_include_directories(main-debug PRIVATE leveldb/include)
-target_compile_options(main-debug PRIVATE -g)
