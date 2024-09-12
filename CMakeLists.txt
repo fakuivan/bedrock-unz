@@ -14,12 +14,10 @@ add_subdirectory(zlib)
 # workaround for https://github.com/google/leveldb/issues/891
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
 
-# taken from https://stackoverflow.com/a/20239564
-set(LEVELDB_BUILD_TESTS OFF CACHE BOOL "Build leveldb tests" FORCE)
-set(LEVELDB_BUILD_BENCHMARKS OFF CACHE BOOL "Build leveldb benchmarks" FORCE)
-set(LEVELDB_INSTALL OFF CACHE BOOL "Install leveldb library" FORCE)
-add_subdirectory(leveldb)
+add_subdirectory(leveldb-mcpe)
 
 add_executable(main main.cpp)
-target_link_libraries(main PRIVATE leveldb)
+include_directories(leveldb-mcpe/include)
+add_compile_definitions(DLLX=)
+target_link_libraries(main PRIVATE leveldb pthread)
 target_include_directories(main PRIVATE leveldb/include)
