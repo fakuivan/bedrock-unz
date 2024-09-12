@@ -19,7 +19,7 @@ Then compile with:
 mkdir build
 cd build
 cmake ..
-build main
+make main
 ```
 
 TODO Make a docker image to build the project.
