@@ -34,15 +34,15 @@ auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts, const std::string &n
 // https://github.com/Amulet-Team/leveldb-mcpe/blob/c446a37734d5480d4ddbc371595e7af5123c4925/mcpe_sample_setup.cpp
 // https://github.com/Amulet-Team/Amulet-LevelDB/blob/47c490e8a0a79916b97aa6ad8b93e3c43b743b8c/src/leveldb/_leveldb.pyx#L191-L199
 auto bedrock_default_db_options(bool compression = true) {
-  std::vector<ldb::Compressor *> compressors(2);
+  std::vector<ldb::Compressor *> compressors;
   auto options = new ldb::Options();
 
   options->filter_policy = ldb::NewBloomFilterPolicy(10);
   options->write_buffer_size = 4 * 1024 * 1024;
   options->block_cache = ldb::NewLRUCache(8 * 1024 * 1024);
   if (compression) {
+    compressors.push_back(new ldb::ZlibCompressorRaw()); // the one used by bedrock as of 1.21.23.01
     compressors.push_back(new ldb::ZlibCompressor());
-    compressors.push_back(new ldb::ZlibCompressorRaw());
     for (int i = 0; i < compressors.size(); i++) {
       options->compressors[i] = compressors[i];
     }
