@@ -9,14 +9,15 @@
 #include "leveldb/db.h"
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
-#include "leveldb/zlib_compressor.h"
 #include "leveldb/write_batch.h"
+#include "leveldb/zlib_compressor.h"
 
 namespace fs = std::filesystem;
 namespace ldb = leveldb;
 
-template<typename Deleter>
-auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts, const std::string &name) {
+template <typename Deleter>
+auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts,
+             const std::string &name) {
   ldb::DB *db;
   auto status = ldb::DB::Open(*opts, name, &db);
   if (!status.ok()) {
@@ -27,7 +28,9 @@ auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts, const std::string &n
       delete db;
     }
   };
-  return std::pair{std::unique_ptr<ldb::DB, decltype(deleter)>(db, std::move(deleter)), status};
+  return std::pair{
+      std::unique_ptr<ldb::DB, decltype(deleter)>(db, std::move(deleter)),
+      status};
 }
 
 // taken from
@@ -41,9 +44,12 @@ auto bedrock_default_db_options(bool compression = true) {
   options->write_buffer_size = 4 * 1024 * 1024;
   options->block_cache = ldb::NewLRUCache(8 * 1024 * 1024);
   if (compression) {
-    compressors.push_back(new ldb::ZlibCompressorRaw()); // the one used by bedrock as of 1.21.23.01
+    compressors.push_back(
+        new ldb::ZlibCompressorRaw());  // the one used by bedrock as
+                                        // of 1.21.23.01
     compressors.push_back(new ldb::ZlibCompressor());
     for (int i = 0; i < compressors.size(); i++) {
+      std::cout << "Adding compressor" << std::endl;
       options->compressors[i] = compressors[i];
     }
   }
@@ -56,10 +62,13 @@ auto bedrock_default_db_options(bool compression = true) {
       delete compressor;
     }
   };
-  return  std::unique_ptr<ldb::Options, decltype(deleter)>(options, std::move(deleter));
+  return std::unique_ptr<ldb::Options, decltype(deleter)>(options,
+                                                          std::move(deleter));
 }
 
-leveldb::Status clone_db(ldb::DB &input, ldb::DB &output, const ldb::WriteOptions &wopts, const ldb::ReadOptions &ropts) {
+leveldb::Status clone_db(ldb::DB &input, ldb::DB &output,
+                         const ldb::WriteOptions &wopts,
+                         const ldb::ReadOptions &ropts) {
   auto buffer = ldb::WriteBatch();
   auto status = ldb::Status();
 
@@ -67,7 +76,7 @@ leveldb::Status clone_db(ldb::DB &input, ldb::DB &output, const ldb::WriteOption
   for (input_iter->SeekToFirst(); input_iter->Valid(); input_iter->Next()) {
     auto constexpr one_meg = 1 * 1000 * 1000;
     buffer.Put(input_iter->value(), input_iter->key());
-    if (buffer.ApproximateSize() < 10*one_meg) {
+    if (buffer.ApproximateSize() < 10 * one_meg) {
       continue;
     }
     status = output.Write(wopts, &buffer);
@@ -96,10 +105,11 @@ int main(int argc, const char **argv) {
   args::HelpFlag help(parser, "help", "Display this help menu", {'h', "help"});
   args::CompletionFlag completion(parser, {"completion"});
   // should be a positional but https://github.com/Taywee/args/issues/125
-  args::ValueFlag<fs::path> input_dir(parser, "input", "Input DB directory", {'i', "input"},
-                                   args::Options::Required);
-  args::ValueFlag<fs::path> output_dir(parser, "output", "Ouput DB directory", {'o', "output"},
-                                   args::Options::Required);
+  args::ValueFlag<fs::path> input_dir(parser, "input", "Input DB directory",
+                                      {'i', "input"}, args::Options::Required);
+  args::ValueFlag<fs::path> output_dir(parser, "output", "Ouput DB directory",
+                                       {'o', "output"},
+                                       args::Options::Required);
   args::Group commands(parser, "commands");
   args::Command compress(commands, "compress",
                          "Enables compression on a database");
@@ -146,16 +156,20 @@ int main(int argc, const char **argv) {
   output_opts->create_if_missing = true;
   output_opts->error_if_exists = true;
 
-  auto [maybe_input_db, input_status] = open_db(std::move(input_opts), *input_dir);
+  auto [maybe_input_db, input_status] =
+      open_db(std::move(input_opts), *input_dir);
   if (!maybe_input_db) {
-    std::cerr << "Failed to open input DB: " << input_status.ToString() << std::endl;
+    std::cerr << "Failed to open input DB: " << input_status.ToString()
+              << std::endl;
     return 1;
   }
   auto &input_db = maybe_input_db;
 
-  auto [maybe_output_db, output_status] = open_db(std::move(output_opts), *output_dir);
+  auto [maybe_output_db, output_status] =
+      open_db(std::move(output_opts), *output_dir);
   if (!maybe_output_db) {
-    std::cerr << "Failed to open input DB: " << output_status.ToString() << std::endl;
+    std::cerr << "Failed to open input DB: " << output_status.ToString()
+              << std::endl;
     return 1;
   }
   auto &output_db = maybe_output_db;
