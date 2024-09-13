@@ -10,6 +10,7 @@
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/zlib_compressor.h"
+#include "leveldb/write_batch.h"
 
 namespace fs = std::filesystem;
 namespace ldb = leveldb;
@@ -58,11 +59,25 @@ auto bedrock_default_db_options(bool compression = true) {
   return  std::unique_ptr<ldb::Options, decltype(deleter)>(options, std::move(deleter));
 }
 
-void clone_db(ldb::DB &input, ldb::DB &output, const ldb::WriteOptions &wopts, const ldb::ReadOptions &ropts) {
+leveldb::Status clone_db(ldb::DB &input, ldb::DB &output, const ldb::WriteOptions &wopts, const ldb::ReadOptions &ropts) {
+  auto buffer = ldb::WriteBatch();
+  auto status = ldb::Status();
+
   auto input_iter = std::unique_ptr<ldb::Iterator>(input.NewIterator(ropts));
   for (input_iter->SeekToFirst(); input_iter->Valid(); input_iter->Next()) {
-    output.Put(wopts, input_iter->value(), input_iter->key());
+    auto constexpr one_meg = 1 * 1000 * 1000;
+    buffer.Put(input_iter->value(), input_iter->key());
+    if (buffer.ApproximateSize() < 10*one_meg) {
+      continue;
+    }
+    status = output.Write(wopts, &buffer);
+    if (!status.ok()) {
+      return status;
+    }
+    buffer.Clear();
   }
+  status = output.Write(wopts, &buffer);
+  return status;
 }
 
 class func_logger : public ldb::Logger {
@@ -150,7 +165,11 @@ int main(int argc, const char **argv) {
   auto ropts = ldb::ReadOptions();
   ropts.fill_cache = false;
   ropts.verify_checksums = true;
-  clone_db(*input_db, *output_db, wopts, ropts);
+  auto clone_status = clone_db(*input_db, *output_db, wopts, ropts);
+  if (!clone_status.ok()) {
+    std::cerr << "Failed to clone DB: " << clone_status.ToString() << std::endl;
+    return 1;
+  }
   output_db->CompactRange(nullptr, nullptr);
   return 0;
 }
