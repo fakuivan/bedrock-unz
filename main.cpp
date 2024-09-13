@@ -40,8 +40,8 @@ auto bedrock_default_db_options(bool compression = true) {
   options->write_buffer_size = 4 * 1024 * 1024;
   options->block_cache = ldb::NewLRUCache(8 * 1024 * 1024);
   if (compression) {
-    compressors[0] = new ldb::ZlibCompressor();
-    compressors[1] = new ldb::ZlibCompressorRaw();
+    compressors.push_back(new ldb::ZlibCompressor());
+    compressors.push_back(new ldb::ZlibCompressorRaw());
     for (int i = 0; i < compressors.size(); i++) {
       options->compressors[i] = compressors[i];
     }
