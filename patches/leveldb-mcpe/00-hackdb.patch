@@ -1,0 +1,26 @@
+diff --git a/table/format.cc b/table/format.cc
+index 79c1fa7..d67ae61 100644
+--- a/table/format.cc
++++ b/table/format.cc
+@@ -13,6 +13,13 @@
+ #include "leveldb/decompress_allocator.h"
+ #include <map>
+ 
++namespace hackdb {
++	void found_block_with_compressor(
++		unsigned char id,
++		const leveldb::Options& dbOptions
++	);
++}
++
+ namespace leveldb {
+ 
+ 	DecompressAllocator::~DecompressAllocator() {}
+@@ -130,6 +137,7 @@ Status Footer::DecodeFrom(Slice* input) {
+ 		}
+ 
+ 		unsigned char compressionID = data[n];
++		hackdb::found_block_with_compressor(compressionID, dbOptions);
+ 
+ 		if (compressionID == 0) {
+ 			if (data != buf) {

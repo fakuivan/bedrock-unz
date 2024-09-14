@@ -6,6 +6,8 @@ Removes and adds compression to a leveldb database. Compiled using mojang's fork
 
 ### Building
 
+First apply the [patches](./patches).
+
 Most of the requirements besides `snappy` are included in this repo. In ubuntu snappy
 can be installed with:
 

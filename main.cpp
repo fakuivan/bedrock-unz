@@ -1,3 +1,5 @@
+#include <array>
+#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -5,6 +7,7 @@
 #include <vector>
 
 #include "args/args.hxx"
+#include "hackdb.h"
 #include "leveldb/cache.h"
 #include "leveldb/db.h"
 #include "leveldb/env.h"
@@ -91,6 +94,54 @@ class func_logger : public ldb::Logger {
  private:
   LogFunc log_func;
 };
+
+using compression_id_t = unsigned int;
+
+std::pair<std::optional<std::map<compression_id_t, size_t>>, ldb::Status>
+find_compression_algo(const std::string &db_path) {
+  auto constexpr counts_size = sizeof(compression_id_t);
+  static_assert(counts_size < 10000);
+  std::array<std::atomic<size_t>, counts_size> counts;
+
+  {
+    auto logger = func_logger([](auto format, auto args) {});
+
+    hackdb::logger_entry entry(&logger,
+                               [&counts](compression_id_t compression_id) {
+                                 counts[compression_id]++;
+                               });
+    auto opts = bedrock_default_db_options(
+        {new ldb::ZlibCompressorRaw(), new ldb::ZlibCompressor()});
+    opts->create_if_missing = false;
+    opts->error_if_exists = false;
+    opts->info_log = &logger;
+    {
+      auto [maybe_db, open_status] = open_db(std::move(opts), db_path);
+      if (!maybe_db) {
+        return {{}, open_status};
+      }
+      auto &db = maybe_db;
+
+      auto ropts = ldb::ReadOptions();
+      ropts.fill_cache = false;
+      ropts.verify_checksums = false;
+
+      auto iter = db->NewIterator(ropts);
+      iter->SeekToFirst();
+      while (iter->Valid()) {
+        iter->Next();
+      }
+    }
+  }
+
+  std::map<compression_id_t, size_t> map;
+  for (int i = 0; i < counts_size; i++) {
+    if (counts[i] > 0) {
+      map[i]++;
+    }
+  }
+  return {{map}, {}};
+}
 
 int main(int argc, const char **argv) {
   args::ArgumentParser parser("Compress and decompress leveldb DB");
