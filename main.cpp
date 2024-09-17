@@ -142,6 +142,67 @@ find_compression_algo(const std::string &db_path) {
   return {{map}, {}};
 }
 
+[[nodiscard]] int compress_decompress(const fs::path &input_dir,
+                                      const fs::path &output_dir,
+                                      const bool compress) {
+  std::cout << "Input database is at: " << input_dir << std::endl;
+  std::cout << "Output database is at: " << output_dir << std::endl;
+
+  auto input_opts = bedrock_default_db_options(
+      {new ldb::ZlibCompressorRaw(), new ldb::ZlibCompressor()});
+  auto input_logger = func_logger([](auto format, auto args) {
+    printf("leveldb intput info: ");
+    vprintf(format, args);
+    printf("\n");
+  });
+  input_opts->info_log = &input_logger;
+  input_opts->create_if_missing = false;
+  input_opts->error_if_exists = false;
+
+  auto output_opts =
+      compress ? bedrock_default_db_options({new ldb::ZlibCompressorRaw()})
+               : bedrock_default_db_options({});
+  auto output_logger = func_logger([](auto format, auto args) {
+    printf("leveldb output info: ");
+    vprintf(format, args);
+    printf("\n");
+  });
+  output_opts->info_log = &output_logger;
+  output_opts->create_if_missing = true;
+  output_opts->error_if_exists = true;
+
+  auto [maybe_input_db, input_status] =
+      open_db(std::move(input_opts), input_dir);
+  if (!maybe_input_db) {
+    std::cerr << "Failed to open input DB: " << input_status.ToString()
+              << std::endl;
+    return 1;
+  }
+  auto &input_db = maybe_input_db;
+
+  auto [maybe_output_db, output_status] =
+      open_db(std::move(output_opts), output_dir);
+  if (!maybe_output_db) {
+    std::cerr << "Failed to open input DB: " << output_status.ToString()
+              << std::endl;
+    return 1;
+  }
+  auto &output_db = maybe_output_db;
+
+  auto wopts = ldb::WriteOptions();
+  wopts.sync = false;
+  auto ropts = ldb::ReadOptions();
+  ropts.fill_cache = false;
+  ropts.verify_checksums = true;
+  auto clone_status = clone_db(*input_db, *output_db, wopts, ropts);
+  if (!clone_status.ok()) {
+    std::cerr << "Failed to clone DB: " << clone_status.ToString() << std::endl;
+    return 1;
+  }
+  output_db->CompactRange(nullptr, nullptr);
+  return 0;
+}
+
 int main(int argc, const char **argv) {
   args::ArgumentParser parser("Compress and decompress leveldb DB");
   args::HelpFlag help(parser, "help", "Display this help menu", {'h', "help"});
@@ -175,60 +236,7 @@ int main(int argc, const char **argv) {
     return 1;
   }
 
-  std::cout << "Input database is at: " << *input_dir << std::endl;
-  std::cout << "Output database is at: " << *output_dir << std::endl;
-
-  auto input_opts = bedrock_default_db_options(
-      {new ldb::ZlibCompressorRaw(), new ldb::ZlibCompressor()});
-  auto input_logger = func_logger([](auto format, auto args) {
-    printf("leveldb intput info: ");
-    vprintf(format, args);
-    printf("\n");
-  });
-  input_opts->info_log = &input_logger;
-  input_opts->create_if_missing = false;
-  input_opts->error_if_exists = false;
-
-  auto output_opts =
-      compress ? bedrock_default_db_options({new ldb::ZlibCompressorRaw()})
-               : bedrock_default_db_options({});
-  auto output_logger = func_logger([](auto format, auto args) {
-    printf("leveldb output info: ");
-    vprintf(format, args);
-    printf("\n");
-  });
-  output_opts->info_log = &output_logger;
-  output_opts->create_if_missing = true;
-  output_opts->error_if_exists = true;
-
-  auto [maybe_input_db, input_status] =
-      open_db(std::move(input_opts), *input_dir);
-  if (!maybe_input_db) {
-    std::cerr << "Failed to open input DB: " << input_status.ToString()
-              << std::endl;
-    return 1;
+  if (compress || decompress) {
+    return compress_decompress(*input_dir, *output_dir, compress);
   }
-  auto &input_db = maybe_input_db;
-
-  auto [maybe_output_db, output_status] =
-      open_db(std::move(output_opts), *output_dir);
-  if (!maybe_output_db) {
-    std::cerr << "Failed to open input DB: " << output_status.ToString()
-              << std::endl;
-    return 1;
-  }
-  auto &output_db = maybe_output_db;
-
-  auto wopts = ldb::WriteOptions();
-  wopts.sync = false;
-  auto ropts = ldb::ReadOptions();
-  ropts.fill_cache = false;
-  ropts.verify_checksums = true;
-  auto clone_status = clone_db(*input_db, *output_db, wopts, ropts);
-  if (!clone_status.ok()) {
-    std::cerr << "Failed to clone DB: " << clone_status.ToString() << std::endl;
-    return 1;
-  }
-  output_db->CompactRange(nullptr, nullptr);
-  return 0;
 }
