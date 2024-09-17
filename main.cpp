@@ -203,40 +203,61 @@ find_compression_algo(const std::string &db_path) {
   return 0;
 }
 
-int main(int argc, const char **argv) {
-  args::ArgumentParser parser("Compress and decompress leveldb DB");
-  args::HelpFlag help(parser, "help", "Display this help menu", {'h', "help"});
-  args::CompletionFlag completion(parser, {"completion"});
-  // should be a positional but https://github.com/Taywee/args/issues/125
-  args::ValueFlag<fs::path> input_dir(parser, "input", "Input DB directory",
-                                      {'i', "input"}, args::Options::Required);
-  args::ValueFlag<fs::path> output_dir(parser, "output", "Ouput DB directory",
-                                       {'o', "output"},
-                                       args::Options::Required);
-  args::Group commands(parser, "commands");
-  args::Command compress(commands, "compress",
-                         "Enables compression on a database");
-  args::Command decompress(commands, "decompress",
-                           "Remove compression on a database");
+class exit_with_code : std::runtime_error {
+ public:
+  const int code;
+  exit_with_code(int code)
+      : std::runtime_error("exit with code: " + std::to_string(code)),
+        code(code) {}
+  virtual ~exit_with_code() = default;
+};
+
+void cli_parse_handler(std::function<void(void)> &&parse,
+                       args::ArgumentParser &parser) {
   try {
-    parser.ParseCLI(argc, argv);
+    parse();
   } catch (const args::Completion &e) {
-    std::cout << e.what();
-    return 0;
+    std::cout << e.what() << std::endl;
+    throw exit_with_code(0);
   } catch (const args::Help &) {
     std::cout << parser;
-    return 0;
+    throw exit_with_code(0);
   } catch (const args::ParseError &e) {
     std::cerr << e.what() << std::endl;
     std::cerr << parser;
-    return 1;
+    throw exit_with_code(1);
   } catch (const args::RequiredError &e) {
     std::cerr << e.what() << std::endl;
     std::cerr << parser;
-    return 1;
+    throw exit_with_code(1);
   }
+}
 
-  if (compress || decompress) {
-    return compress_decompress(*input_dir, *output_dir, compress);
+int main(int argc, const char **argv) {
+  args::ArgumentParser parser("Compress and decompress leveldb DB");
+  args::HelpFlag help(parser, "help", "Display this help menu", {'h', "help"});
+  args::CompletionFlag completion(parser, {"complete"});
+  // should be a positional but https://github.com/Taywee/args/issues/125
+  args::ValueFlag<fs::path> input_dir(parser, "input", "Input DB directory",
+                                      {'i', "input"}, args::Options::Required);
+  args::Group commands(parser, "commands");
+  args::Command copy(
+      commands, "copy", "Copy database", [&](args::Subparser &subp) {
+        auto out_dir = args::Positional<fs::path>(
+            subp, "out", "Output DB directory", args::Options::Required);
+        auto compress = args::Flag(subp, "compress", "Copy with compression",
+                                   {"c", "compress"});
+
+        subp.Parse();
+
+        throw exit_with_code(
+            compress_decompress(*input_dir, *out_dir, compress));
+      });
+
+  try {
+    cli_parse_handler([&]() { parser.ParseCLI(argc, argv); }, parser);
+  } catch (const exit_with_code &e) {
+    return e.code;
   }
+  assert(false);
 }

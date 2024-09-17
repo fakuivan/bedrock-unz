@@ -9,8 +9,9 @@
             // Resolved by CMake Tools:
             "program": "${command:cmake.launchTargetPath}",
             "args": [
-                "-d${command:cmake.getLaunchTargetDirectory}/test/world/db/",
-                "decompress"
+                "-i${command:cmake.getLaunchTargetDirectory}/test/original/",
+                "copy",
+                "${command:cmake.getLaunchTargetDirectory}/test/decompressed/"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
