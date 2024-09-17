@@ -2,6 +2,7 @@
 #include <atomic>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <variant>
 #include <vector>
@@ -95,21 +96,19 @@ class func_logger : public ldb::Logger {
   LogFunc log_func;
 };
 
-using compression_id_t = unsigned int;
-
-std::pair<std::optional<std::map<compression_id_t, size_t>>, ldb::Status>
+using cid_t = hackdb::compression_id_t;
+std::pair<std::optional<std::map<cid_t, size_t>>, ldb::Status>
 find_compression_algo(const std::string &db_path) {
-  auto constexpr counts_size = sizeof(compression_id_t);
+  static_assert(std::numeric_limits<cid_t>::min() == 0);
+  auto constexpr counts_size = std::numeric_limits<cid_t>::max() + 1;
   static_assert(counts_size < 10000);
   std::array<std::atomic<size_t>, counts_size> counts;
 
   {
     auto logger = func_logger([](auto format, auto args) {});
 
-    hackdb::logger_entry entry(&logger,
-                               [&counts](compression_id_t compression_id) {
-                                 counts[compression_id]++;
-                               });
+    hackdb::logger_entry entry(
+        &logger, [&counts](cid_t compression_id) { counts[compression_id]++; });
     auto opts = bedrock_default_db_options(
         {new ldb::ZlibCompressorRaw(), new ldb::ZlibCompressor()});
     opts->create_if_missing = false;
@@ -134,7 +133,7 @@ find_compression_algo(const std::string &db_path) {
     }
   }
 
-  std::map<compression_id_t, size_t> map;
+  std::map<cid_t, size_t> map;
   for (int i = 0; i < counts_size; i++) {
     if (counts[i] > 0) {
       map[i]++;

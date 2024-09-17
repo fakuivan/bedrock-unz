@@ -17,14 +17,18 @@
   TypeName &operator=(TypeName &&) = delete;
 
 namespace hackdb {
+
 namespace ldb = leveldb;
+
+using compression_id_t = unsigned char;
 struct logger_entry;
+
 class block_logger_entries {
   std::shared_mutex mutex;
   std::unordered_map<const ldb::Logger *, std::unordered_set<logger_entry *>>
       map;
   friend struct logger_entry;
-  friend void found_block_with_compressor(unsigned char id,
+  friend void found_block_with_compressor(compression_id_t id,
                                           const ldb::Options &dbOptions);
 } block_logger_map;
 
@@ -32,13 +36,13 @@ struct logger_entry {
   NOT_COPYABLE(logger_entry)
   NOT_MOVEABLE(logger_entry)
   logger_entry(const ldb::Logger *logger,
-               std::function<void(unsigned char)> &&func)
+               std::function<void(compression_id_t)> &&func)
       : logger(logger), func(func) {
     std::unique_lock lock(block_logger_map.mutex);
     block_logger_map.map[logger].insert(this);
   };
 
-  std::function<void(unsigned char)> func;
+  std::function<void(compression_id_t)> func;
   const ldb::Logger *logger;
   ~logger_entry() {
     std::unique_lock lock(block_logger_map.mutex);
@@ -46,7 +50,7 @@ struct logger_entry {
   }
 };
 
-void found_block_with_compressor(unsigned char id,
+void found_block_with_compressor(compression_id_t id,
                                  const ldb::Options &dbOptions) {
   std::shared_lock lock(block_logger_map.mutex);
   auto logger = dbOptions.info_log;
