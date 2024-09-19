@@ -37,7 +37,7 @@ struct logger_entry {
   NOT_MOVEABLE(logger_entry)
   logger_entry(const ldb::Logger *logger,
                std::function<void(compression_id_t)> &&func)
-      : logger(logger), func(func) {
+      : func(func), logger(logger) {
     std::unique_lock lock(block_logger_map.mutex);
     block_logger_map.map[logger].insert(this);
   };

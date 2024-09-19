@@ -46,7 +46,7 @@ auto bedrock_default_db_options(std::vector<ldb::Compressor *> &&compressors) {
   options->filter_policy = ldb::NewBloomFilterPolicy(10);
   options->write_buffer_size = 4 * 1024 * 1024;
   options->block_cache = ldb::NewLRUCache(8 * 1024 * 1024);
-  for (int i = 0; i < compressors.size(); i++) {
+  for (size_t i = 0; i < compressors.size(); i++) {
     options->compressors[i] = compressors[i];
   }
   options->block_size = 163840;
