@@ -136,7 +136,7 @@ find_compression_algo(const std::string &db_path) {
   std::map<cid_t, size_t> map;
   for (int i = 0; i < counts_size; i++) {
     if (counts[i] > 0) {
-      map[i]++;
+      map[i] = counts[i];
     }
   }
   return {{map}, {}};
