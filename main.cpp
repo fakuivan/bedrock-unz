@@ -125,7 +125,7 @@ find_compression_algo(const std::string &db_path) {
       ropts.fill_cache = false;
       ropts.verify_checksums = false;
 
-      auto iter = db->NewIterator(ropts);
+      auto iter = std::unique_ptr<ldb::Iterator>(db->NewIterator(ropts));
       iter->SeekToFirst();
       while (iter->Valid()) {
         iter->Next();
