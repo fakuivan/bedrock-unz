@@ -98,14 +98,15 @@ class func_logger : public ldb::Logger {
 
 using cid_t = hackdb::compression_id_t;
 std::pair<std::optional<std::map<cid_t, size_t>>, ldb::Status>
-find_compression_algo(const std::string &db_path) {
+find_compression_algo(const std::string &db_path,
+                      func_logger::LogFunc &&log_func) {
   static_assert(std::numeric_limits<cid_t>::min() == 0);
   auto constexpr counts_size = std::numeric_limits<cid_t>::max() + 1;
   static_assert(counts_size < 10000);
   std::array<std::atomic<size_t>, counts_size> counts{};
 
   {
-    auto logger = func_logger([](auto format, auto args) {});
+    auto logger = func_logger(std::move(log_func));
 
     hackdb::logger_entry entry(
         &logger, [&counts](cid_t compression_id) { counts[compression_id]++; });
@@ -203,6 +204,25 @@ find_compression_algo(const std::string &db_path) {
   return 0;
 }
 
+int cmd_find_compression_algos(const fs::path &db_path) {
+  auto [result, db_status] =
+      find_compression_algo(db_path, [](auto format, auto args) {
+        printf("leveldb info: ");
+        vprintf(format, args);
+        printf("\n");
+      });
+  if (!db_status.ok()) {
+    std::cerr << "Failed to open DB: " << db_status.ToString() << std::endl;
+    return 1;
+  }
+  assert(result.has_value());
+  for (auto &[compressor_id, occurrences] : *result) {
+    std::cout << "Read blocks with compressor id of " << (int)compressor_id
+              << " " << occurrences << " times" << std::endl;
+  }
+  return 0;
+}
+
 class exit_with_code : std::runtime_error {
  public:
   const int code;
@@ -252,6 +272,13 @@ int main(int argc, const char **argv) {
 
         throw exit_with_code(
             compress_decompress(*input_dir, *out_dir, compress));
+      });
+
+  args::Command list_algos(
+      commands, "list-algos", "Lists compression algorithms used in DB",
+      [&](args::Subparser &subp) {
+        subp.Parse();
+        throw exit_with_code(cmd_find_compression_algos(*input_dir));
       });
 
   try {
