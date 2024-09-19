@@ -102,7 +102,7 @@ find_compression_algo(const std::string &db_path) {
   static_assert(std::numeric_limits<cid_t>::min() == 0);
   auto constexpr counts_size = std::numeric_limits<cid_t>::max() + 1;
   static_assert(counts_size < 10000);
-  std::array<std::atomic<size_t>, counts_size> counts;
+  std::array<std::atomic<size_t>, counts_size> counts{};
 
   {
     auto logger = func_logger([](auto format, auto args) {});
