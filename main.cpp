@@ -19,6 +19,64 @@
 namespace fs = std::filesystem;
 namespace ldb = leveldb;
 
+class compression_type {
+ public:
+  auto make_compressor() const noexcept {
+    auto compressor = make_compressor_();
+    assert(!compressor || compressor->uniqueCompressionID == compression_id);
+    return std::unique_ptr<ldb::Compressor>(compressor);
+  }
+  compression_type(const std::string name, bool is_default,
+                   std::function<ldb::Compressor *(void)> &&make_compressor_)
+      : make_compressor_(make_compressor_),
+        compression_id(get_compression_id()),
+        name(name),
+        is_default(is_default) {}
+  compression_type()
+      : make_compressor_([]() { return nullptr; }),
+        compression_id(0),
+        name("no compression"),
+        is_default(false) {};
+
+ private:
+  const std::function<ldb::Compressor *(void)> make_compressor_;
+  hackdb::compression_id_t get_compression_id() const noexcept {
+    std::unique_ptr<ldb::Compressor> compressor(make_compressor_());
+    assert(compressor);
+    auto id = compressor->uniqueCompressionID;
+    return id;
+  }
+
+ public:
+  const hackdb::compression_id_t compression_id;
+  const std::string name;
+  const bool is_default;
+};
+
+const auto &get_compressors() {
+  static std::vector<compression_type> compressors = {
+      {"zlib", false, []() { return new ldb::ZlibCompressor(); }},
+      {"zlib raw", true, []() { return new ldb::ZlibCompressorRaw(); }},
+      {}};
+  return compressors;
+}
+
+auto make_compressors(bool only_default = false) {
+  std::vector<std::unique_ptr<ldb::Compressor>> compressors = {};
+  for (auto &compressor : get_compressors()) {
+    if (compressor.compression_id == 0) continue;
+    if (only_default) {
+      if (compressor.is_default) {
+        compressors.push_back(compressor.make_compressor());
+        break;
+      }
+    } else {
+      compressors.push_back(compressor.make_compressor());
+    }
+  }
+  return compressors;
+}
+
 template <typename Deleter>
 auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts,
              const std::string &name) {
@@ -40,7 +98,8 @@ auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts,
 // taken from
 // https://github.com/Amulet-Team/leveldb-mcpe/blob/c446a37734d5480d4ddbc371595e7af5123c4925/mcpe_sample_setup.cpp
 // https://github.com/Amulet-Team/Amulet-LevelDB/blob/47c490e8a0a79916b97aa6ad8b93e3c43b743b8c/src/leveldb/_leveldb.pyx#L191-L199
-auto bedrock_default_db_options(std::vector<ldb::Compressor *> &&compressors) {
+auto bedrock_default_db_options(
+    std::vector<std::unique_ptr<ldb::Compressor>> &&compressors) {
   auto options = new ldb::Options();
   auto filter_policy =
       std::unique_ptr<const ldb::FilterPolicy>(ldb::NewBloomFilterPolicy(10));
@@ -51,20 +110,15 @@ auto bedrock_default_db_options(std::vector<ldb::Compressor *> &&compressors) {
   options->write_buffer_size = 4 * 1024 * 1024;
   options->block_cache = block_cache.get();
   for (size_t i = 0; i < compressors.size(); i++) {
-    options->compressors[i] = compressors[i];
+    options->compressors[i] = compressors[i].get();
   }
   options->block_size = 163840;
   options->max_open_files = 1000;
 
-  auto deleter = [compressors,
+  auto deleter = [compressors{std::move(compressors)},
                   filter_policy{std::move(filter_policy)},
                   block_cache{std::move(block_cache)}](
-                     ldb::Options *options) noexcept {
-    delete options;
-    for (auto &compressor : compressors) {
-      delete compressor;
-    }
-  };
+                     ldb::Options *options) noexcept { delete options; };
   return std::unique_ptr<ldb::Options, decltype(deleter)>(options,
                                                           std::move(deleter));
 }
@@ -117,8 +171,7 @@ find_compression_algo(const std::string &db_path,
 
     hackdb::logger_entry entry(
         &logger, [&counts](cid_t compression_id) { counts[compression_id]++; });
-    auto opts = bedrock_default_db_options(
-        {new ldb::ZlibCompressorRaw(), new ldb::ZlibCompressor()});
+    auto opts = bedrock_default_db_options(make_compressors(false));
     opts->create_if_missing = false;
     opts->error_if_exists = false;
     opts->info_log = &logger;
@@ -156,8 +209,7 @@ find_compression_algo(const std::string &db_path,
   std::cout << "Input database is at: " << input_dir << std::endl;
   std::cout << "Output database is at: " << output_dir << std::endl;
 
-  auto input_opts = bedrock_default_db_options(
-      {new ldb::ZlibCompressorRaw(), new ldb::ZlibCompressor()});
+  auto input_opts = bedrock_default_db_options(make_compressors(false));
   auto input_logger = func_logger([](auto format, auto args) {
     printf("leveldb intput info: ");
     vprintf(format, args);
@@ -167,9 +219,9 @@ find_compression_algo(const std::string &db_path,
   input_opts->create_if_missing = false;
   input_opts->error_if_exists = false;
 
-  auto output_opts =
-      compress ? bedrock_default_db_options({new ldb::ZlibCompressorRaw()})
-               : bedrock_default_db_options({});
+  auto output_opts = compress
+                         ? bedrock_default_db_options(make_compressors(true))
+                         : bedrock_default_db_options({});
   auto output_logger = func_logger([](auto format, auto args) {
     printf("leveldb output info: ");
     vprintf(format, args);
@@ -224,7 +276,15 @@ int cmd_find_compression_algos(const fs::path &db_path) {
   }
   assert(result.has_value());
   for (auto &[compressor_id, occurrences] : *result) {
-    std::cout << "Read blocks with compressor id of " << (int)compressor_id
+    const auto &compressors = get_compressors();
+    const auto it = std::find_if(
+        compressors.begin(), compressors.end(), [&](const auto &compressor) {
+          return compressor.compression_id == compressor_id;
+        });
+    std::string compressor_name =
+        (it != compressors.end()) ? it->name : "<unknown>";
+    std::cout << "Read blocks with compressor " << compressor_name
+              << " (id=" << (int)compressor_id << ")"
               << " " << occurrences << " times" << std::endl;
   }
   return 0;
