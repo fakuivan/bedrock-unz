@@ -42,17 +42,24 @@ auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts,
 // https://github.com/Amulet-Team/Amulet-LevelDB/blob/47c490e8a0a79916b97aa6ad8b93e3c43b743b8c/src/leveldb/_leveldb.pyx#L191-L199
 auto bedrock_default_db_options(std::vector<ldb::Compressor *> &&compressors) {
   auto options = new ldb::Options();
+  auto filter_policy =
+      std::unique_ptr<const ldb::FilterPolicy>(ldb::NewBloomFilterPolicy(10));
+  auto block_cache =
+      std::unique_ptr<ldb::Cache>(ldb::NewLRUCache(8 * 1024 * 1024));
 
-  options->filter_policy = ldb::NewBloomFilterPolicy(10);
+  options->filter_policy = filter_policy.get();
   options->write_buffer_size = 4 * 1024 * 1024;
-  options->block_cache = ldb::NewLRUCache(8 * 1024 * 1024);
+  options->block_cache = block_cache.get();
   for (size_t i = 0; i < compressors.size(); i++) {
     options->compressors[i] = compressors[i];
   }
   options->block_size = 163840;
   options->max_open_files = 1000;
 
-  auto deleter = [compressors](ldb::Options *options) noexcept {
+  auto deleter = [compressors,
+                  filter_policy{std::move(filter_policy)},
+                  block_cache{std::move(block_cache)}](
+                     ldb::Options *options) noexcept {
     delete options;
     for (auto &compressor : compressors) {
       delete compressor;
