@@ -4,6 +4,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -18,6 +19,21 @@
 
 namespace fs = std::filesystem;
 namespace ldb = leveldb;
+
+template <typename Ptr, typename... Args>
+struct deleter_pool {
+  std::optional<std::tuple<Args...>> pool = {};
+  virtual void operator()(Ptr *this_) noexcept {
+    assert(this_ != nullptr);
+    assert(pool.has_value());
+    delete this_;
+    pool = {};
+  }
+  deleter_pool(Ptr *ctad_, Args &&...args)
+      : pool({{std::forward<Args>(args)...}}) {
+    (void)ctad_;
+  }
+};
 
 class compression_type {
  public:
@@ -85,14 +101,9 @@ auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts,
   if (!status.ok()) {
     db = nullptr;
   }
-  auto deleter = [opts{std::move(opts)}](ldb::DB *db) noexcept {
-    if (db != nullptr) {
-      delete db;
-    }
-  };
+  auto pool = deleter_pool((ldb::DB *)nullptr, std::move(opts));
   return std::pair{
-      std::unique_ptr<ldb::DB, decltype(deleter)>(db, std::move(deleter)),
-      status};
+      std::unique_ptr<ldb::DB, decltype(pool)>(db, std::move(pool)), status};
 }
 
 // taken from
@@ -115,12 +126,10 @@ auto bedrock_default_db_options(
   options->block_size = 163840;
   options->max_open_files = 1000;
 
-  auto deleter = [compressors{std::move(compressors)},
-                  filter_policy{std::move(filter_policy)},
-                  block_cache{std::move(block_cache)}](
-                     ldb::Options *options) noexcept { delete options; };
-  return std::unique_ptr<ldb::Options, decltype(deleter)>(options,
-                                                          std::move(deleter));
+  auto pool = deleter_pool((ldb::Options *)nullptr, std::move(compressors),
+                           std::move(filter_policy), std::move(block_cache));
+  return std::unique_ptr<ldb::Options, decltype(pool)>(options,
+                                                       std::move(pool));
 }
 
 leveldb::Status clone_db(ldb::DB &input, ldb::DB &output,
@@ -158,39 +167,31 @@ class func_logger : public ldb::Logger {
 };
 
 using cid_t = hackdb::compression_id_t;
-std::pair<std::optional<std::map<cid_t, size_t>>, ldb::Status>
-find_compression_algo(const std::string &db_path,
-                      func_logger::LogFunc &&log_func) {
+std::optional<std::map<cid_t, size_t>> find_compression_algo(
+    std::function<std::shared_ptr<ldb::DB>()> &&open_db,
+    const ldb::Logger *logger) {
+  assert(logger != nullptr);
   static_assert(std::numeric_limits<cid_t>::min() == 0);
   auto constexpr counts_size = std::numeric_limits<cid_t>::max() + 1;
   static_assert(counts_size < 10000);
   std::array<std::atomic<size_t>, counts_size> counts{};
 
   {
-    auto logger = func_logger(std::move(log_func));
-
     hackdb::logger_entry entry(
-        &logger, [&counts](cid_t compression_id) { counts[compression_id]++; });
-    auto opts = bedrock_default_db_options(make_compressors(false));
-    opts->create_if_missing = false;
-    opts->error_if_exists = false;
-    opts->info_log = &logger;
-    {
-      auto [maybe_db, open_status] = open_db(std::move(opts), db_path);
-      if (!maybe_db) {
-        return {{}, open_status};
-      }
-      auto &db = maybe_db;
+        logger, [&counts](cid_t compression_id) { counts[compression_id]++; });
+    auto maybe_db = open_db();
+    if (!maybe_db) {
+      return {};
+    }
+    auto &db = maybe_db;
+    auto ropts = ldb::ReadOptions();
+    ropts.fill_cache = false;
+    ropts.verify_checksums = false;
 
-      auto ropts = ldb::ReadOptions();
-      ropts.fill_cache = false;
-      ropts.verify_checksums = false;
-
-      auto iter = std::unique_ptr<ldb::Iterator>(db->NewIterator(ropts));
-      iter->SeekToFirst();
-      while (iter->Valid()) {
-        iter->Next();
-      }
+    auto iter = std::unique_ptr<ldb::Iterator>(db->NewIterator(ropts));
+    iter->SeekToFirst();
+    while (iter->Valid()) {
+      iter->Next();
     }
   }
 
@@ -200,7 +201,36 @@ find_compression_algo(const std::string &db_path,
       map[i] = counts[i];
     }
   }
-  return {{map}, {}};
+  return {map};
+}
+
+template <typename T, typename D>
+std::shared_ptr<T> to_shared(std::unique_ptr<T, D> &&uptr) {
+  return std::move(uptr);
+}
+
+std::pair<std::optional<std::map<cid_t, size_t>>, ldb::Status>
+find_compression_algo(const std::string &db_path,
+                      func_logger::LogFunc &&log_func) {
+  auto logger = func_logger(std::move(log_func));
+
+  ldb::Status status{};
+
+  auto result = find_compression_algo(
+      [&status, &db_path, &logger]() -> std::shared_ptr<ldb::DB> {
+        auto opts = bedrock_default_db_options(make_compressors(false));
+        opts->create_if_missing = false;
+        opts->error_if_exists = false;
+        opts->info_log = &logger;
+
+        auto [maybe_db, open_status] = open_db(std::move(opts), db_path);
+        status = std::move(open_status);
+        // return std::shared_ptr<ldb::DB>{std::move(maybe_db)};
+        return std::move(maybe_db);
+      },
+      &logger);
+  assert(result.has_value() == status.ok());
+  return {result, status};
 }
 
 [[nodiscard]] int compress_decompress(const fs::path &input_dir,
@@ -290,6 +320,11 @@ int cmd_find_compression_algos(const fs::path &db_path) {
   return 0;
 }
 
+int cmd_compact(const fs::path &db_path) {
+  (void)db_path;
+  return 1;
+}
+
 class exit_with_code : std::runtime_error {
  public:
   const int code;
@@ -346,6 +381,15 @@ int main(int argc, const char **argv) {
       [&](args::Subparser &subp) {
         subp.Parse();
         throw exit_with_code(cmd_find_compression_algos(*input_dir));
+      });
+
+  args::Command compact(
+      commands, "compact", "Compact DB in place", [&](args::Subparser &subp) {
+        auto compress = args::Flag(subp, "compress",
+                                   "Run compaction with compression algorithm",
+                                   {"c", "compress"});
+        subp.Parse();
+        throw exit_with_code(cmd_compact(*input_dir));
       });
 
   try {
