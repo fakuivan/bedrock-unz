@@ -15,6 +15,7 @@
 #include "leveldb/filter_policy.h"
 #include "leveldb/write_batch.h"
 #include "leveldb/zlib_compressor.h"
+#include "utils.hpp"
 
 namespace fs = std::filesystem;
 namespace ldb = leveldb;
@@ -85,14 +86,10 @@ auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts,
   if (!status.ok()) {
     db = nullptr;
   }
-  auto deleter = [opts{std::move(opts)}](ldb::DB *db) noexcept {
-    if (db != nullptr) {
-      delete db;
-    }
-  };
-  return std::pair{
-      std::unique_ptr<ldb::DB, decltype(deleter)>(db, std::move(deleter)),
-      status};
+  auto arena = unique_deleter_arena((ldb::DB *)nullptr, std::move(opts));
+  return std::pair{std::move(std::unique_ptr<ldb::DB, decltype(arena)>(
+                       db, std::move(arena))),
+                   status};
 }
 
 // taken from
@@ -115,12 +112,11 @@ auto bedrock_default_db_options(
   options->block_size = 163840;
   options->max_open_files = 1000;
 
-  auto deleter = [compressors{std::move(compressors)},
-                  filter_policy{std::move(filter_policy)},
-                  block_cache{std::move(block_cache)}](
-                     ldb::Options *options) noexcept { delete options; };
-  return std::unique_ptr<ldb::Options, decltype(deleter)>(options,
-                                                          std::move(deleter));
+  auto arena =
+      unique_deleter_arena((ldb::Options *)nullptr, std::move(compressors),
+                           std::move(filter_policy), std::move(block_cache));
+  return std::unique_ptr<ldb::Options, decltype(arena)>(options,
+                                                        std::move(arena));
 }
 
 leveldb::Status clone_db(ldb::DB &input, ldb::DB &output,

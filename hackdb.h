@@ -7,14 +7,7 @@
 
 #include "leveldb/env.h"
 #include "leveldb/options.h"
-
-#define NOT_COPYABLE(TypeName)         \
-  TypeName(TypeName const &) = delete; \
-  TypeName &operator=(TypeName const &) = delete;
-
-#define NOT_MOVEABLE(TypeName)    \
-  TypeName(TypeName &&) = delete; \
-  TypeName &operator=(TypeName &&) = delete;
+#include "utils.hpp"
 
 namespace hackdb {
 
@@ -33,8 +26,8 @@ class block_logger_entries {
 } block_logger_map;
 
 struct logger_entry {
-  NOT_COPYABLE(logger_entry)
-  NOT_MOVEABLE(logger_entry)
+  UTILS_NOT_COPYABLE(logger_entry)
+  UTILS_NOT_MOVEABLE(logger_entry)
   logger_entry(const ldb::Logger *logger,
                std::function<void(compression_id_t)> &&func)
       : func(func), logger(logger) {
