@@ -119,6 +119,9 @@ auto bedrock_default_db_options(
                                                         std::move(arena));
 }
 
+using db_unique_ptr_t =
+    decltype(open_db(bedrock_default_db_options({}), "").first);
+
 leveldb::Status clone_db(ldb::DB &input, ldb::DB &output,
                          const ldb::WriteOptions &wopts,
                          const ldb::ReadOptions &ropts) {
@@ -154,39 +157,31 @@ class func_logger : public ldb::Logger {
 };
 
 using cid_t = hackdb::compression_id_t;
-std::pair<std::optional<std::map<cid_t, size_t>>, ldb::Status>
-find_compression_algo(const std::string &db_path,
-                      func_logger::LogFunc &&log_func) {
+template <typename DbContainer>
+std::optional<std::map<cid_t, size_t>> find_compression_algo(
+    std::function<DbContainer()> &&open_db, const ldb::Logger *logger) {
+  assert(logger != nullptr);
   static_assert(std::numeric_limits<cid_t>::min() == 0);
   auto constexpr counts_size = std::numeric_limits<cid_t>::max() + 1;
   static_assert(counts_size < 10000);
   std::array<std::atomic<size_t>, counts_size> counts{};
 
   {
-    auto logger = func_logger(std::move(log_func));
-
     hackdb::logger_entry entry(
-        &logger, [&counts](cid_t compression_id) { counts[compression_id]++; });
-    auto opts = bedrock_default_db_options(make_compressors(false));
-    opts->create_if_missing = false;
-    opts->error_if_exists = false;
-    opts->info_log = &logger;
-    {
-      auto [maybe_db, open_status] = open_db(std::move(opts), db_path);
-      if (!maybe_db) {
-        return {{}, open_status};
-      }
-      auto &db = maybe_db;
+        logger, [&counts](cid_t compression_id) { counts[compression_id]++; });
+    auto maybe_db = open_db();
+    if (!maybe_db) {
+      return {};
+    }
+    ldb::DB &db = *maybe_db;
+    auto ropts = ldb::ReadOptions();
+    ropts.fill_cache = false;
+    ropts.verify_checksums = false;
 
-      auto ropts = ldb::ReadOptions();
-      ropts.fill_cache = false;
-      ropts.verify_checksums = false;
-
-      auto iter = std::unique_ptr<ldb::Iterator>(db->NewIterator(ropts));
-      iter->SeekToFirst();
-      while (iter->Valid()) {
-        iter->Next();
-      }
+    auto iter = std::unique_ptr<ldb::Iterator>(db.NewIterator(ropts));
+    iter->SeekToFirst();
+    while (iter->Valid()) {
+      iter->Next();
     }
   }
 
@@ -196,7 +191,7 @@ find_compression_algo(const std::string &db_path,
       map[i] = counts[i];
     }
   }
-  return {{map}, {}};
+  return {map};
 }
 
 [[nodiscard]] int compress_decompress(const fs::path &input_dir,
@@ -260,17 +255,34 @@ find_compression_algo(const std::string &db_path,
 }
 
 int cmd_find_compression_algos(const fs::path &db_path) {
-  auto [result, db_status] =
-      find_compression_algo(db_path, [](auto format, auto args) {
-        printf("leveldb info: ");
-        vprintf(format, args);
-        printf("\n");
-      });
-  if (!db_status.ok()) {
-    std::cerr << "Failed to open DB: " << db_status.ToString() << std::endl;
+  auto logger = func_logger([](auto format, auto args) {
+    printf("leveldb info: ");
+    vprintf(format, args);
+    printf("\n");
+  });
+
+  ldb::Status status{};
+
+  auto result = find_compression_algo<db_unique_ptr_t>(
+      [&status, &db_path, &logger]() {
+        auto opts = bedrock_default_db_options(make_compressors(false));
+        opts->create_if_missing = false;
+        opts->error_if_exists = false;
+        opts->info_log = &logger;
+
+        auto [maybe_db, open_status] = open_db(std::move(opts), db_path);
+        status = std::move(open_status);
+        static_assert(std::is_move_constructible<decltype(open_status)>::value);
+        return std::move(maybe_db);
+      },
+      &logger);
+
+  assert(result.has_value() == status.ok());
+  if (!status.ok()) {
+    std::cerr << "Failed to open DB: " << status.ToString() << std::endl;
     return 1;
   }
-  assert(result.has_value());
+
   for (auto &[compressor_id, occurrences] : *result) {
     const auto &compressors = get_compressors();
     const auto it = std::find_if(
