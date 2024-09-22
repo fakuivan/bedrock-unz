@@ -285,10 +285,11 @@ int cmd_find_compression_algos(const fs::path &db_path) {
 
   for (auto &[compressor_id, occurrences] : *result) {
     const auto &compressors = get_compressors();
-    const auto it = std::find_if(
-        compressors.begin(), compressors.end(), [&](const auto &compressor) {
-          return compressor.compression_id == compressor_id;
-        });
+    const auto it =
+        std::find_if(compressors.begin(), compressors.end(),
+                     [&, id{compressor_id}](const auto &compressor) {
+                       return compressor.compression_id == id;
+                     });
     std::string compressor_name =
         (it != compressors.end()) ? it->name : "<unknown>";
     std::cout << "Read blocks with compressor " << compressor_name
