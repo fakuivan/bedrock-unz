@@ -27,17 +27,15 @@ class compression_type {
     assert(!compressor || compressor->uniqueCompressionID == compression_id);
     return std::unique_ptr<ldb::Compressor>(compressor);
   }
-  compression_type(const std::string name, bool is_default,
+  compression_type(const std::string name,
                    std::function<ldb::Compressor *(void)> &&make_compressor_)
       : make_compressor_(make_compressor_),
         compression_id(get_compression_id()),
-        name(name),
-        is_default(is_default) {}
+        name(name) {}
   compression_type()
       : make_compressor_([]() { return nullptr; }),
         compression_id(0),
-        name("no compression"),
-        is_default(false) {};
+        name("no compression") {};
 
  private:
   const std::function<ldb::Compressor *(void)> make_compressor_;
@@ -51,13 +49,13 @@ class compression_type {
  public:
   const hackdb::compression_id_t compression_id;
   const std::string name;
-  const bool is_default;
 };
 
 const auto &get_compressors() {
   static std::vector<compression_type> compressors = {
-      {"zlib", false, []() { return new ldb::ZlibCompressor(); }},
-      {"zlib raw", true, []() { return new ldb::ZlibCompressorRaw(); }},
+      // First compressor is the default one
+      {"zlib raw", []() { return new ldb::ZlibCompressorRaw(); }},
+      {"zlib", []() { return new ldb::ZlibCompressor(); }},
       {}};
   return compressors;
 }
@@ -67,13 +65,10 @@ auto make_compressors(bool only_default = false) {
   for (auto &compressor : get_compressors()) {
     if (compressor.compression_id == 0) continue;
     if (only_default) {
-      if (compressor.is_default) {
-        compressors.push_back(compressor.make_compressor());
-        break;
-      }
-    } else {
       compressors.push_back(compressor.make_compressor());
+      break;
     }
+    compressors.push_back(compressor.make_compressor());
   }
   return compressors;
 }
