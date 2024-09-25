@@ -73,48 +73,81 @@ auto make_compressors(bool only_default = false) {
   return compressors;
 }
 
-template <typename Deleter>
-auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts,
-             const std::string &name) {
+class db_opts {
+ public:
+  UTILS_DEFAULT_MOVE(db_opts)
+  UTILS_NOT_COPYABLE(db_opts)
+  db_opts(std::vector<std::unique_ptr<ldb::Compressor>> &&compressors,
+          std::unique_ptr<const ldb::FilterPolicy> &&filter_policy,
+          std::unique_ptr<ldb::Cache> &&cache, ldb::Options &&opts)
+      : compressors(std::move(compressors)),
+        filter_policy(std::move(filter_policy)),
+        cache(std::move(cache)) {
+    assert(opts.block_cache == nullptr);
+    assert(opts.filter_policy == nullptr);
+    opts.block_cache = this->cache.get();
+    opts.filter_policy = this->filter_policy.get();
+    for (size_t i = 0; i < std::size(opts.compressors); i++) {
+      assert(opts.compressors[i] == nullptr);
+    }
+    assert(std::size(this->compressors) <= std::size(opts.compressors));
+    for (size_t i = 0; i < this->compressors.size(); i++) {
+      opts.compressors[i] = this->compressors[i].get();
+    }
+    this->opts = std::move(opts);
+  }
+
+  void modify(std::function<void(ldb::Options &)> &&func) {
+    func(opts);
+    assert(opts.block_cache == cache.get());
+    assert(opts.filter_policy == filter_policy.get());
+    for (size_t i = 0; i < std::size(opts.compressors); i++) {
+      assert(opts.compressors[i] ==
+             (compressors.size() > i ? compressors[i].get() : nullptr));
+    }
+  }
+
+  const ldb::Options *operator->() const { return &opts; }
+  const ldb::Options &operator*() const { return opts; }
+  const auto &get_compressors() const { return compressors; }
+  const auto &get_filter_policy() const { return filter_policy; }
+  const auto &get_cache() const { return cache; }
+
+ private:
+  std::vector<std::unique_ptr<ldb::Compressor>> compressors;
+  std::unique_ptr<const ldb::FilterPolicy> filter_policy;
+  std::unique_ptr<ldb::Cache> cache;
+  ldb::Options opts;
+};
+
+using db_unique_ptr_t =
+    std::unique_ptr<leveldb::DB, unique_deleter_arena<db_opts>>;
+
+auto open_db(db_opts &&opts, const std::string &name) {
   ldb::DB *db;
   auto status = ldb::DB::Open(*opts, name, &db);
   if (!status.ok()) {
     db = nullptr;
   }
   auto arena = unique_deleter_arena(std::move(opts));
-  return std::pair{std::move(std::unique_ptr<ldb::DB, decltype(arena)>(
-                       db, std::move(arena))),
-                   status};
+  return std::pair{db_unique_ptr_t(db, std::move(arena)), status};
 }
 
 // taken from
 // https://github.com/Amulet-Team/leveldb-mcpe/blob/c446a37734d5480d4ddbc371595e7af5123c4925/mcpe_sample_setup.cpp
 // https://github.com/Amulet-Team/Amulet-LevelDB/blob/47c490e8a0a79916b97aa6ad8b93e3c43b743b8c/src/leveldb/_leveldb.pyx#L191-L199
-auto bedrock_default_db_options(
+db_opts bedrock_default_db_options(
     std::vector<std::unique_ptr<ldb::Compressor>> &&compressors) {
-  auto options = new ldb::Options();
-  auto filter_policy =
-      std::unique_ptr<const ldb::FilterPolicy>(ldb::NewBloomFilterPolicy(10));
-  auto block_cache =
-      std::unique_ptr<ldb::Cache>(ldb::NewLRUCache(8 * 1024 * 1024));
-
-  options->filter_policy = filter_policy.get();
-  options->write_buffer_size = 4 * 1024 * 1024;
-  options->block_cache = block_cache.get();
-  for (size_t i = 0; i < compressors.size(); i++) {
-    options->compressors[i] = compressors[i].get();
-  }
-  options->block_size = 163840;
-  options->max_open_files = 1000;
-
-  auto arena = unique_deleter_arena(
-      std::move(compressors), std::move(filter_policy), std::move(block_cache));
-  return std::unique_ptr<ldb::Options, decltype(arena)>(options,
-                                                        std::move(arena));
+  auto options = ldb::Options();
+  options.write_buffer_size = 4 * 1024 * 1024;
+  options.block_size = 163840;
+  options.max_open_files = 1000;
+  return db_opts(
+      std::move(compressors),
+      std::unique_ptr<const ldb::FilterPolicy>(ldb::NewBloomFilterPolicy(10)),
+      std::unique_ptr<ldb::Cache>(ldb::NewLRUCache(8 * 1024 * 1024)),
+      std::move(options));
 }
-
-using db_unique_ptr_t =
-    decltype(open_db(bedrock_default_db_options({}), "").first);
 
 leveldb::Status clone_db(ldb::DB &input, ldb::DB &output,
                          const ldb::WriteOptions &wopts,
@@ -200,9 +233,11 @@ std::optional<std::map<cid_t, size_t>> find_compression_algo(
     vprintf(format, args);
     printf("\n");
   });
-  input_opts->info_log = &input_logger;
-  input_opts->create_if_missing = false;
-  input_opts->error_if_exists = false;
+  input_opts.modify([&](auto &opts) {
+    opts.info_log = &input_logger;
+    opts.create_if_missing = false;
+    opts.error_if_exists = false;
+  });
 
   auto output_opts = compress
                          ? bedrock_default_db_options(make_compressors(true))
@@ -212,9 +247,11 @@ std::optional<std::map<cid_t, size_t>> find_compression_algo(
     vprintf(format, args);
     printf("\n");
   });
-  output_opts->info_log = &output_logger;
-  output_opts->create_if_missing = true;
-  output_opts->error_if_exists = true;
+  output_opts.modify([&](auto &opts) {
+    opts.info_log = &output_logger;
+    opts.create_if_missing = false;
+    opts.error_if_exists = false;
+  });
 
   auto [maybe_input_db, input_status] =
       open_db(std::move(input_opts), input_dir);
@@ -260,9 +297,11 @@ int cmd_find_compression_algos(const fs::path &db_path) {
   auto result = find_compression_algo<db_unique_ptr_t>(
       [&status, &db_path, &logger]() {
         auto opts = bedrock_default_db_options(make_compressors(false));
-        opts->create_if_missing = false;
-        opts->error_if_exists = false;
-        opts->info_log = &logger;
+        opts.modify([&](auto &opts) {
+          opts.create_if_missing = false;
+          opts.error_if_exists = false;
+          opts.info_log = &logger;
+        });
 
         auto [maybe_db, open_status] = open_db(std::move(opts), db_path);
         status = std::move(open_status);
