@@ -81,7 +81,7 @@ auto open_db(std::unique_ptr<ldb::Options, Deleter> &&opts,
   if (!status.ok()) {
     db = nullptr;
   }
-  auto arena = unique_deleter_arena((ldb::DB *)nullptr, std::move(opts));
+  auto arena = unique_deleter_arena(std::move(opts));
   return std::pair{std::move(std::unique_ptr<ldb::DB, decltype(arena)>(
                        db, std::move(arena))),
                    status};
@@ -107,9 +107,8 @@ auto bedrock_default_db_options(
   options->block_size = 163840;
   options->max_open_files = 1000;
 
-  auto arena =
-      unique_deleter_arena((ldb::Options *)nullptr, std::move(compressors),
-                           std::move(filter_policy), std::move(block_cache));
+  auto arena = unique_deleter_arena(
+      std::move(compressors), std::move(filter_policy), std::move(block_cache));
   return std::unique_ptr<ldb::Options, decltype(arena)>(options,
                                                         std::move(arena));
 }

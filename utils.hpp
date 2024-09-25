@@ -17,22 +17,21 @@
 #define UTILS_DEFAULT_COPY(type) UTILS_SET_COPY(type, default)
 #define UTILS_DEFAULT_MOVE(type) UTILS_SET_MOVE(type, default)
 
-template <typename Ptr, typename... Args>
+template <typename... Args>
 struct unique_deleter_arena {
   UTILS_DEFAULT_MOVE(unique_deleter_arena)
   UTILS_NOT_COPYABLE(unique_deleter_arena)
 
   std::optional<std::tuple<Args...>> arena = {};
+  template <typename Ptr>
   void operator()(Ptr *this_) noexcept {
     assert(this_ != nullptr);
     assert(arena.has_value());
     delete this_;
     arena = {};
   }
-  unique_deleter_arena(Ptr *ctad_, Args &&...args)
-      : arena({{std::forward<Args>(args)...}}) {
-    (void)ctad_;
-  }
+  unique_deleter_arena(Args &&...args)
+      : arena({{std::forward<Args>(args)...}}) {}
 };
 
 // shared_ptr in this version of clang does not require a shared_ptr deleter
