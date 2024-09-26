@@ -352,6 +352,71 @@ int cmd_find_compression_algos(const fs::path &db_path) {
   return 0;
 }
 
+struct missing_compressor_counter {
+  block_compression_type_counter counter;
+  std::set<cid_t> compressor_ids;
+  missing_compressor_counter(const db_opts &opts) : counter(opts->info_log) {
+    compressor_ids = {};
+    for (const auto &compressor : opts.get_compressors()) {
+      if (!compressor) {
+        continue;
+      }
+      compressor_ids.insert(compressor->uniqueCompressionID);
+    }
+  }
+  std::map<cid_t, size_t> get_missing() {
+    auto counts = counter.get_counts();
+    counts.erase(0);
+    for (const auto &compressor_id : compressor_ids) {
+      counts.erase(compressor_id);
+    }
+    return counts;
+  }
+};
+
+int cmd_compact(const fs::path &db_path, const bool use_compression) {
+  auto logger = func_logger([](auto format, auto args) {
+    printf("leveldb info: ");
+    vprintf(format, args);
+    printf("\n");
+  });
+  auto opts = use_compression
+                  ? bedrock_default_db_options(make_compressors(false))
+                  : bedrock_default_db_options({});
+  opts.modify([&](auto &opts) {
+    opts.create_if_missing = false;
+    opts.error_if_exists = false;
+    opts.info_log = &logger;
+  });
+  auto missing = missing_compressor_counter{opts};
+  auto [maybe_db, status] = open_db(std::move(opts), db_path);
+  assert(!maybe_db == !status.ok());
+  if (!maybe_db) {
+    std::cerr << "Failed to open DB: " << status.ToString() << std::endl;
+    return 1;
+  }
+
+  auto &db = *maybe_db;
+  auto ropts = ldb::ReadOptions();
+  ropts.fill_cache = false;
+  ropts.verify_checksums = true;
+  std::cout << "Sweeping db..." << std::endl;
+  sweep_db(db, ropts);
+  std::cout << "DB swept, checking for incompatible compressors..."
+            << std::endl;
+  for (const auto [compressor_id, occurrences] : missing.get_missing()) {
+    std::cerr << "Read " << occurrences
+              << " blocks with unknown compression algorithm with id="
+              << (int)compressor_id << std::endl;
+    std::cerr << "Database might be in a corrupted state after this sweep"
+              << std::endl;
+    return 1;
+  }
+  std::cout << "Running compaction" << std::endl;
+  maybe_db->CompactRange(nullptr, nullptr);
+  return 0;
+}
+
 class exit_with_code : std::runtime_error {
  public:
   const int code;
@@ -408,6 +473,15 @@ int main(int argc, const char **argv) {
       [&](args::Subparser &subp) {
         subp.Parse();
         throw exit_with_code(cmd_find_compression_algos(*input_dir));
+      });
+
+  args::Command compact(
+      commands, "compact", "Compact DB in place", [&](args::Subparser &subp) {
+        auto compress = args::Flag(subp, "compress",
+                                   "Run compaction with compression algorithm",
+                                   {"c", "compress"});
+        subp.Parse();
+        throw exit_with_code(cmd_compact(*input_dir, compress));
       });
 
   try {
