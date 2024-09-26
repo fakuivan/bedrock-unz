@@ -184,18 +184,50 @@ class func_logger : public ldb::Logger {
 };
 
 using cid_t = hackdb::compression_id_t;
+struct block_compression_type_counter {
+  static_assert(std::numeric_limits<cid_t>::min() == 0);
+  static size_t constexpr counts_size = std::numeric_limits<cid_t>::max() + 1;
+  static_assert(counts_size < 10000);
+
+  std::array<std::atomic<size_t>, counts_size> counts{};
+  const hackdb::logger_entry entry;
+  auto get_counts() {
+    std::map<cid_t, size_t> counts_set{};
+    for (size_t i = 0; i < counts_size; i++) {
+      auto counts_for_i =
+          counts[i].exchange(0, std::memory_order::memory_order_relaxed);
+      if (counts_for_i > 0) {
+        counts_set[i] = counts_for_i;
+      }
+    }
+    return counts_set;
+  }
+
+  block_compression_type_counter(const ldb::Logger *logger)
+      : counts(), entry(logger, [this](cid_t compression_id) {
+          counts[compression_id].fetch_add(
+              1, std::memory_order::memory_order_relaxed);
+        }) {
+    assert(logger != nullptr);
+  }
+};
+
+auto sweep_db(ldb::DB &db, const ldb::ReadOptions &ropts) {
+  auto iter = std::unique_ptr<ldb::Iterator>(db.NewIterator(ropts));
+  iter->SeekToFirst();
+  while (iter->Valid()) {
+    iter->Next();
+  }
+  return iter;
+}
+
 template <typename DbContainer>
 std::optional<std::map<cid_t, size_t>> find_compression_algo(
     std::function<DbContainer()> &&open_db, const ldb::Logger *logger) {
   assert(logger != nullptr);
-  static_assert(std::numeric_limits<cid_t>::min() == 0);
-  auto constexpr counts_size = std::numeric_limits<cid_t>::max() + 1;
-  static_assert(counts_size < 10000);
-  std::array<std::atomic<size_t>, counts_size> counts{};
+  block_compression_type_counter counter{logger};
 
   {
-    hackdb::logger_entry entry(
-        logger, [&counts](cid_t compression_id) { counts[compression_id]++; });
     auto maybe_db = open_db();
     if (!maybe_db) {
       return {};
@@ -204,21 +236,9 @@ std::optional<std::map<cid_t, size_t>> find_compression_algo(
     auto ropts = ldb::ReadOptions();
     ropts.fill_cache = false;
     ropts.verify_checksums = false;
-
-    auto iter = std::unique_ptr<ldb::Iterator>(db.NewIterator(ropts));
-    iter->SeekToFirst();
-    while (iter->Valid()) {
-      iter->Next();
-    }
+    sweep_db(db, ropts);
   }
-
-  std::map<cid_t, size_t> map;
-  for (int i = 0; i < counts_size; i++) {
-    if (counts[i] > 0) {
-      map[i] = counts[i];
-    }
-  }
-  return {map};
+  return {counter.get_counts()};
 }
 
 [[nodiscard]] int compress_decompress(const fs::path &input_dir,
