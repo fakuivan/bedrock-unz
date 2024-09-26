@@ -65,3 +65,12 @@ says "it's all good" and just keeps on going. This will result on the program ig
 the compressed blocks, even when `paranoid_checks` is set. This does not look like it's
 what's causing the issue however. Maybe try a round conversion for a very minimalist
 word and analyze the blocks by hand?
+
+I was not able to detect any issues when running a compaction on a db created by bedrock.
+Given that ldb failed silently on me once we're going into defensive mode, try:
+
+* Grab a db, deleting all of its contents, and cloning to it
+* It might be the creation part that is causing issues.
+  ldb has the `->Delete` method, maybe try that?
+* Cloning in reverse, will it give the same results?
+* Grab an empty db created by us, then a purged one created by bedrock and compare
