@@ -436,6 +436,54 @@ struct missing_compressor_counter {
   }
 };
 
+std::string_view slice_to_view(ldb::Slice slice) {
+  return {slice.data(), slice.size()};
+}
+
+int cmd_dump(const fs::path &db_path) {
+  auto logger = func_logger([](auto format, auto args) {
+    fprintf(stderr, "leveldb info: ");
+    vfprintf(stderr, format, args);
+    fprintf(stderr, "\n");
+  });
+  auto opts = bedrock_default_db_options(make_compressors());
+  opts.modify([&](auto &opts) {
+    opts.create_if_missing = false;
+    opts.error_if_exists = false;
+    opts.info_log = &logger;
+  });
+  auto missing = missing_compressor_counter{opts};
+  auto [maybe_db, status] = open_db(std::move(opts), db_path);
+  std::cerr << "Opening db..." << std::endl;
+  assert(!maybe_db == !status.ok());
+  if (!maybe_db) {
+    std::cerr << "Failed to open DB: " << status.ToString() << std::endl;
+    return 1;
+  }
+  auto &db = *maybe_db;
+  auto ropts = ldb::ReadOptions();
+  ropts.fill_cache = false;
+  ropts.verify_checksums = true;
+  auto iter = std::unique_ptr<ldb::Iterator>(db.NewIterator(ropts));
+  std::cout << "{" << std::endl;
+  std::string buffer = "";
+  for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+    python_bytes_repr(buffer, slice_to_view(iter->key()));
+    buffer += ": ";
+    python_bytes_repr(buffer, slice_to_view(iter->key()));
+    buffer += ",";
+    std::cout << buffer << std::endl;
+    buffer.clear();
+  }
+  std::cout << "}" << std::endl;
+  if (!iter->status().ok()) {
+    std::cerr << "Failed to read DB contents: " << iter->status().ToString()
+              << std::endl;
+    return 1;
+  }
+  return 0;
+}
+
 int cmd_compact(const fs::path &db_path, const bool use_compression) {
   auto logger = func_logger([](auto format, auto args) {
     printf("leveldb info: ");
@@ -601,6 +649,12 @@ int main(int argc, const char **argv) {
                         subp.Parse();
                         throw exit_with_code(cmd_clear(*input_dir));
                       });
+
+  args::Command dump(commands, "dump", "Dump DB in Python dict format",
+                     [&](args::Subparser &subp) {
+                       subp.Parse();
+                       throw exit_with_code(cmd_dump(*input_dir));
+                     });
 
   try {
     cli_parse_handler([&]() { parser.ParseCLI(argc, argv); }, parser);
