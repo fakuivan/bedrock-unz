@@ -75,3 +75,16 @@ Given that ldb failed silently on me once we're going into defensive mode, try:
 * Tried overwritting a copy of the db and it appeared to work, but you'd need the original db
 * Cloning in reverse, will it give the same results?: same results
 * Grab an empty db created by us, then a purge one created by bedrock and compare
+
+Update:
+
+I've confirmed that amulet's leveldb python package can read the bedrock database and
+create a new one without issues. I also implemented a dump command, that exports the
+db contents to a python dict, it seems that the keys are truncated. The same amount of
+keys exist in the dump compared to the db using amulet, but the contents are not the same.
+
+We could try the following:
+
+* Create a small db with amulet, with and without compression
+* Try to read long and short key/values, see if they get truncated
+* Add entries to the DB from this program, confirm that we can read it using amulet
