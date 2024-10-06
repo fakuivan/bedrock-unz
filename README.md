@@ -69,8 +69,9 @@ word and analyze the blocks by hand?
 I was not able to detect any issues when running a compaction on a db created by bedrock.
 Given that ldb failed silently on me once we're going into defensive mode, try:
 
-* Grab a db, deleting all of its contents, and cloning to it
+* Grab a db, deleting all of its contents, and cloning to it: same results
 * It might be the creation part that is causing issues.
-  ldb has the `->Delete` method, maybe try that?
-* Cloning in reverse, will it give the same results?
-* Grab an empty db created by us, then a purged one created by bedrock and compare
+  ldb has the `->Delete` method, maybe try that?: same results
+* Tried overwritting a copy of the db and it appeared to work, but you'd need the original db
+* Cloning in reverse, will it give the same results?: same results
+* Grab an empty db created by us, then a purge one created by bedrock and compare
