@@ -569,7 +569,7 @@ int main(int argc, const char **argv) {
         auto out_dir = args::Positional<fs::path>(
             subp, "out", "Output DB directory", args::Options::Required);
         auto compress = args::Flag(subp, "compress", "Copy with compression",
-                                   {"c", "compress"});
+                                   {'c', "compress"});
         auto overwrite =
             args::Flag(subp, "overwrite", "Overwrite existing database",
                        {'o', "overwrite"});
@@ -591,7 +591,7 @@ int main(int argc, const char **argv) {
       commands, "compact", "Compact DB in place", [&](args::Subparser &subp) {
         auto compress = args::Flag(subp, "compress",
                                    "Run compaction with compression algorithm",
-                                   {"c", "compress"});
+                                   {'c', "compress"});
         subp.Parse();
         throw exit_with_code(cmd_compact(*input_dir, compress));
       });
