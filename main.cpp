@@ -304,7 +304,8 @@ std::optional<std::map<cid_t, size_t>> find_compression_algo(
 
 [[nodiscard]] int compress_decompress(const fs::path &input_dir,
                                       const fs::path &output_dir,
-                                      const bool compress) {
+                                      const bool compress,
+                                      const bool overwrite) {
   std::cout << "Input database is at: " << input_dir << std::endl;
   std::cout << "Output database is at: " << output_dir << std::endl;
 
@@ -330,8 +331,8 @@ std::optional<std::map<cid_t, size_t>> find_compression_algo(
   });
   output_opts.modify([&](auto &opts) {
     opts.info_log = &output_logger;
-    opts.create_if_missing = false;
-    opts.error_if_exists = false;
+    opts.create_if_missing = !overwrite;
+    opts.error_if_exists = !overwrite;
   });
 
   auto [maybe_input_db, input_status] =
@@ -569,11 +570,14 @@ int main(int argc, const char **argv) {
             subp, "out", "Output DB directory", args::Options::Required);
         auto compress = args::Flag(subp, "compress", "Copy with compression",
                                    {"c", "compress"});
+        auto overwrite =
+            args::Flag(subp, "overwrite", "Overwrite existing database",
+                       {'o', "overwrite"});
 
         subp.Parse();
 
         throw exit_with_code(
-            compress_decompress(*input_dir, *out_dir, compress));
+            compress_decompress(*input_dir, *out_dir, compress, overwrite));
       });
 
   args::Command list_algos(
