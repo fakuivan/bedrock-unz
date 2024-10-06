@@ -216,6 +216,23 @@ leveldb::Status clone_db(ldb::DB &input, ldb::DB &output,
   return buffer.finish();
 }
 
+leveldb::Status clear_db(ldb::DB &db) {
+  auto ropts = ldb::ReadOptions();
+  ropts.fill_cache = false;
+  auto wopts = ldb::WriteOptions();
+  {
+    db_buffered_write buffer{db, wopts, 10 * one_meg};
+    auto iter = std::unique_ptr<ldb::Iterator>(db.NewIterator(ropts));
+
+    for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+      if (!buffer.Delete(iter->key())) {
+        return buffer.last_status;
+      }
+    }
+    return buffer.finish();
+  }
+}
+
 class func_logger : public ldb::Logger {
  public:
   using LogFunc = std::function<void(const char *, va_list)>;
@@ -461,6 +478,53 @@ int cmd_compact(const fs::path &db_path, const bool use_compression) {
   return 0;
 }
 
+int cmd_clear(const fs::path &db_path) {
+  auto logger = func_logger([](auto format, auto args) {
+    printf("leveldb info: ");
+    vprintf(format, args);
+    printf("\n");
+  });
+  auto opts = bedrock_default_db_options(make_compressors());
+  opts.modify([&](auto &opts) {
+    opts.create_if_missing = false;
+    opts.error_if_exists = false;
+    opts.info_log = &logger;
+  });
+  auto missing = missing_compressor_counter{opts};
+  auto [maybe_db, status] = open_db(std::move(opts), db_path);
+  std::cout << "Opening db..." << std::endl;
+  assert(!maybe_db == !status.ok());
+  if (!maybe_db) {
+    std::cerr << "Failed to open DB: " << status.ToString() << std::endl;
+    return 1;
+  }
+  auto &db = *maybe_db;
+
+  auto ropts = ldb::ReadOptions();
+  ropts.fill_cache = false;
+  ropts.verify_checksums = true;
+  sweep_db(db, ropts);
+  std::cout << "DB swept, checking for incompatible compressors..."
+            << std::endl;
+  for (const auto [compressor_id, occurrences] : missing.get_missing()) {
+    std::cerr << "Read " << occurrences
+              << " blocks with unknown compression algorithm with id="
+              << (int)compressor_id << std::endl;
+    std::cerr << "Database might be in a corrupted state after this sweep"
+              << std::endl;
+    return 1;
+  }
+
+  std::cout << "Clearing db..." << std::endl;
+  status = clear_db(db);
+  if (!status.ok()) {
+    std::cerr << "Failed to clear db: " << status.ToString() << std::endl;
+    return 1;
+  }
+
+  return 0;
+}
+
 class exit_with_code : std::runtime_error {
  public:
   const int code;
@@ -527,6 +591,12 @@ int main(int argc, const char **argv) {
         subp.Parse();
         throw exit_with_code(cmd_compact(*input_dir, compress));
       });
+
+  args::Command clear(commands, "clear", "Clear DB in place",
+                      [&](args::Subparser &subp) {
+                        subp.Parse();
+                        throw exit_with_code(cmd_clear(*input_dir));
+                      });
 
   try {
     cli_parse_handler([&]() { parser.ParseCLI(argc, argv); }, parser);
