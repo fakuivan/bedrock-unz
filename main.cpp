@@ -149,27 +149,71 @@ db_opts bedrock_default_db_options(
       std::move(options));
 }
 
+bool buffer_empty(ldb::WriteBatch &batch) {
+  static size_t empty_size = []() {
+    ldb::WriteBatch empty_batch{};
+    size_t initial_size = empty_batch.ApproximateSize();
+    empty_batch.Clear();
+    size_t cleared_size = empty_batch.ApproximateSize();
+    assert(cleared_size == initial_size);
+    return cleared_size;
+  }();
+  return batch.ApproximateSize() == empty_size;
+}
+
+constexpr size_t one_meg = 1000 * 1000;
+
+struct db_buffered_write {
+  ldb::DB &db;
+  ldb::WriteOptions wopts;
+  size_t max_size = one_meg;
+  ldb::Status last_status{};
+  ldb::WriteBatch buffer{};
+
+  [[nodiscard]] bool Put(const ldb::Slice &key, const ldb::Slice &value) {
+    buffer.Put(key, value);
+    return maybe_flush() ? last_status.ok() : true;
+  }
+
+  [[nodiscard]] bool Delete(const ldb::Slice &key) {
+    buffer.Delete(key);
+    return maybe_flush() ? last_status.ok() : true;
+  }
+
+  bool maybe_flush() {
+    if (buffer.ApproximateSize() < max_size) {
+      return false;
+    }
+    flush();
+    return true;
+  }
+
+  ldb::Status finish() {
+    flush();
+    return last_status;
+  }
+
+  void flush() {
+    assert(last_status.ok());
+    last_status = db.Write(wopts, &buffer);
+    buffer.Clear();
+  }
+
+  ~db_buffered_write() { assert(buffer_empty(buffer)); }
+};
+
 leveldb::Status clone_db(ldb::DB &input, ldb::DB &output,
                          const ldb::WriteOptions &wopts,
                          const ldb::ReadOptions &ropts) {
-  auto buffer = ldb::WriteBatch();
-  auto status = ldb::Status();
+  db_buffered_write buffer{output, wopts, 10 * one_meg};
 
   auto input_iter = std::unique_ptr<ldb::Iterator>(input.NewIterator(ropts));
   for (input_iter->SeekToFirst(); input_iter->Valid(); input_iter->Next()) {
-    auto constexpr one_meg = 1 * 1000 * 1000;
-    buffer.Put(input_iter->value(), input_iter->key());
-    if (buffer.ApproximateSize() < 10 * one_meg) {
-      continue;
+    if (!buffer.Put(input_iter->value(), input_iter->key())) {
+      return buffer.last_status;
     }
-    status = output.Write(wopts, &buffer);
-    if (!status.ok()) {
-      return status;
-    }
-    buffer.Clear();
   }
-  status = output.Write(wopts, &buffer);
-  return status;
+  return buffer.finish();
 }
 
 class func_logger : public ldb::Logger {
