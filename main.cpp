@@ -209,7 +209,7 @@ leveldb::Status clone_db(ldb::DB &input, ldb::DB &output,
 
   auto input_iter = std::unique_ptr<ldb::Iterator>(input.NewIterator(ropts));
   for (input_iter->SeekToFirst(); input_iter->Valid(); input_iter->Next()) {
-    if (!buffer.Put(input_iter->value(), input_iter->key())) {
+    if (!buffer.Put(input_iter->key(), input_iter->value())) {
       return buffer.last_status;
     }
   }
@@ -470,7 +470,7 @@ int cmd_dump(const fs::path &db_path) {
   for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
     python_bytes_repr(buffer, slice_to_view(iter->key()));
     buffer += ": ";
-    python_bytes_repr(buffer, slice_to_view(iter->key()));
+    python_bytes_repr(buffer, slice_to_view(iter->value()));
     buffer += ",";
     std::cout << buffer << std::endl;
     buffer.clear();
